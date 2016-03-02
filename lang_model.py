@@ -58,7 +58,7 @@ class LanguageModel(Model):
         # easily done in the step function
 
         # reverse each example of y (not the batches, just the variables)
-        y_rev = y[:, ::-1, :]
+        y_rev = y[:, ::-1]
 
         # get initial values for LSTMs
         hf, cf = self.forward_lstm.get_initial_hidden
@@ -81,26 +81,31 @@ class LanguageModel(Model):
         # and                              [0,0, 0, 3,45,13,4]
         # concatenate correctly to         [4/3,13/25,45/13,3/4,0,0,0]
 
-
-        h_lang = zeros((self.N, self.batch_size, self.m))
-        b_indx = zeros((self.N, self.batch_size)).astype(int)
-        c = zeros((self.batch_size)).astype(int)
-        for i in range(self.N):
+        # stores the indices of the string
+        b_indx = zeros((N, batch_size), int)
+        # stores the last-set index
+        c = zeros((batch_size,), int)
+        for i in range(N):
             # if this part of y_rev is 0, ignore
             # else, get the current index
-            indx = T.switch(T.neq(y_rev[i], 0), i, 0)
-            b_indx = T.set_subtensor(b_indx[indx, :], indx)
+            indx = T.switch(T.neq(y_rev[:,i], 0), i, 0)
+            # set b_indx to be the current indx if this is
+            # a valid part of the string
+            b_indx = T.set_subtensor(b_indx[c,T.arange(batch_size)], indx)
             
             # increment those that were used
-            inc = T.switch(T.neq(y_rev[i], 0), 1, 0)
+            inc = T.switch(T.neq(y_rev[:,i], 0), 1, 0)
             c  = c + inc
-
-        h_b_aligned = hb[b_indx]
+            
+        # the magic that gets hb to align with hf
+        h_b_aligned = hb[b_indx][:,T.arange(batch_size),T.arange(batch_size)]
+        # concatenate them together. Now everything is aligned, as it should be!
+        h_lang = T.concatenate([hf, h_b_aligned], axis=2)
 
         # axis 0 -> N
         # axis 1 -> batch
         # axis 2 -> m
-        return h_lang[::-1]
+        return h_lang
 
     def step(self, y_m, yb_m, hf, cf, hb, cb):
         # one-hot encode y,yb (NEED TO SAVE PREVIOUS VALUES FOR MASKING!!!)
