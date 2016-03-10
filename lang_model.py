@@ -53,12 +53,14 @@ class LanguageModel(Model):
                                        name='backward-lstm')
         
     def run(self, y):
+        # y comes in as shape bactch X total_seq x 1
+        y = y.transpose([1,0,2])
         # y is of shape seq X batch X 1 and of type 'int'
         # y needs to be 1-hot encoded, but this is more
         # easily done in the step function
 
         # reverse each example of y (not the batches, just the variables)
-        y_rev = y[:, ::-1]
+        y_rev = y[::-1, :]
 
         # get initial values for LSTMs
         hf, cf = self.forward_lstm.get_initial_hidden
@@ -77,14 +79,16 @@ class LanguageModel(Model):
                                        n_steps=self.N)
 
         # return forward and backward concatenated
-        # this needs to be aligned so that [4,13,45,3,0, 0, 0]
+        # this needs to be aligned so that [4,13,45,3,X, X, X]
         # and                              [0,0, 0, 3,45,13,4]
-        # concatenate correctly to         [4/3,13/25,45/13,3/4,0,0,0]
+        # concatenate correctly to         [4/3,13/25,45/13,3/4,X,X,X]
 
         # stores the indices of the string
         b_indx = zeros((N, batch_size), int)
         # stores the last-set index
         c = zeros((batch_size,), int)
+        # This loop creates an array that can be used to
+        # map hb to hf with the proper alignment
         for i in range(N):
             # if this part of y_rev is 0, ignore
             # else, get the current index
@@ -98,6 +102,10 @@ class LanguageModel(Model):
             c  = c + inc
             
         # the magic that gets hb to align with hf
+        # it takes hb, uses the aligning indices and grabs those on the
+        # diagonal as the elements we are interested in. This results in
+        # essentially "shifting" the first non-zero element of hb
+        # to the front of the list, for each sample in the batch
         h_b_aligned = hb[b_indx][:,T.arange(batch_size),T.arange(batch_size)]
         # concatenate them together. Now everything is aligned, as it should be!
         h_lang = T.concatenate([hf, h_b_aligned], axis=2)

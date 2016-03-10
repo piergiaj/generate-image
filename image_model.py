@@ -45,7 +45,9 @@ class ImageModel(Model):
 
     def align(self, h_gen, h_lang, mask):
         # h_lang is N x batch x m
+        # h_gen is batch x gen_dim
         # U is l x m
+        # mask determines which elements of h_lang we care about
         # we want the result to be N x batch x l
 
         # using batched_dot this can be done
@@ -56,12 +58,12 @@ class ImageModel(Model):
         # align_lang is now N x batch x l
         align_lang = self.batched_dot(h_lang, U)
 
-        # W is l x gen_dim
+        # W is gen_dim x l
         # h_gen is batch x gen_dim
         # result is batch x l
-        align_img = T.dot(self.W, h_gen)
+        align_img = T.dot(h_gen, self.W)
         # use broadcasting to get a to be N x batch x l
-        alpha = T.tanh(align_lang + align_img + self.b)
+        alpha = T.tanh(align_lang + align_img.dimshuffle('x',0,1) + self.b.dimshuffle('x','x',0))
         
         # v is l, a is N x batch x l
         # result will be N x batch
@@ -70,7 +72,7 @@ class ImageModel(Model):
         # need to mask a before normalizing
         # so that the parts that are masked do
         # not affect the normalization
-        alpha = T.switch(mask, alpha, zeros((self.N, self.l)))
+        alpha = T.switch(mask, alpha, zeros((self.N, self.batch_size)))
 
         # normalize a by the sum of a along the N (axis=0)
         # creates a vector of length N
@@ -90,55 +92,112 @@ class ImageModel(Model):
 
     # use with partial to pass in first args
     # scan will pass the remaining args
-    def step(self, train, h_infer, c_infer, stuff):
+    def step_train(self, rnd_in, kl, h_infer, c_infer, h_gen, c_gen, c, mu_gen, sigma_gen, h_lang):
         # h_gen is a sequence
         # h_lang is a non-sequence (but it is used to calculate
         #     the align function each step)
 
-        # draw samples from N(mu(h_gen), std(h_gen))
-        # mu(h_gen) and std(h_gen) give a bach X z_dim vector
-        mu_h_gen = T.tanh(T.dot(self.W_mu, h_gen))
-        std_h_gen = T.exp(T.tanh(T.dot(self.W_sigma, h_gen)))
-
-        # to draw samples from a normal, we want 1 sample for each
-        # of the z_dims and 1 sample for each batch, so we want
-        # a [1,1] output for the batch X z_dim vectors (eq 1)
-        z = self.random.normal([1,1], avg=mu_h_gen, std=std_h_gen)
+        # eqs 10-13
+        # compute "error image"
+        x_hat = x-T.nnet.sigmoid(c)
+        # read from both input (x) and error image
+        r = self.reader.run(x, h_gen)
+        r_hat = self.reader.run(x_hat, h_gen)
+        # concatente the two read regions
+        r = T.concatenate([r,r_hat], axis=1)
+        
+        # run the infer lstm on the read regions
+        val = self.infer_in.run(T.concatenate([r, h_gen], axis=1))
+        h_infer_t, c_infer_t = self.infer_lstm.run(val, h_infer, c_infer)
+        
+        # I don't believe we actually need to sample from Q
+        # we just use it to minimze the loss so that it learns
+        # good values for the infer-lstm
+        # But we do need the mean and logsigma for KL
+        mu_infer = T.dot(self.W_mu_infer, h_infer_t)
+        sigma_infer = 0.5*T.dot(self.W_sigma_infer, h_infer_t)
+        # generate a sample from these normal distributions
+        z = mu_infer + T.exp(sigma_infer) * rnd_in
+        
+        # calculate kl-divergence between infer and gen normal distributions
+        kl_t = kl + T.sum(-1 + ((mu_infer - mu_gen)**2 + T.exp(2*sigma_infer))/
+                          (T.exp(2*sigma_gen)) - 2*sigma_infer + 2*sigma_gen)
+        
+        # generate a sample from the generative distribution
+        z = mu_gen + T.exp(sigma_gen) * rnd_in
 
         # do the alignment (eq 2)
         # this is m-dimensions - each word is summed into 1 vector
-        # to represent the whole sequence, so Nxm becomes m
+        # to represent the whole sequence, so N x batch x m becomes batch x m
         s = self.align(h_gen, h_lang)
 
         # run the LSTM (eq 3)
+        # val is batch x m+z_dims
         val = self.gen_in.run(T.concatenate([z,s], axis=1))
         h_gen_t, c_gen_t = self.gen_lstm.run(val, h_gen, c_gen)
 
+        mu_gen = T.tanh(self.W_mu_gen, h_gen_t)
+        sigma_gen = T.tanh(self.W_sigma_gen, h_gen_t)
+
         # do the write (eq 4)
         c_t = c + self.writer.run(h_gen_t)
-        
-        if train:
-            # eqs 10-13
-            # compute "error image"
-            x_hat = x-T.nnet.sigmoid(c)
-            # read from both input (x) and error image
-            r = self.reader.run(x, h_gen)
-            r_hat = self.reader.run(x_hat, h_gen)
-            # concatente the two read regions
-            r = T.concatenate([r,r_hat], axis=1)
 
-            # run the infer lstm on the read regions
-            val = self.infer_in.run(T.concatenate([r, h_gen], axis=1))
-            h_infer_t, c_infer_t = self.infer_lstm.run(val, h_infer, c_infer)
+        return kl_t, h_infer_t, c_infer_t, h_gen_t, c_gen_t, c_t, mu_gen, sigma_gen
+    
+    def step_gen(self, rnd_in, h_gen c_gen, mu_gen, sigma_gen, c, h_lang):
+        # generate a sample from the generative distribution
+        z = mu_gen + T.exp(sigma_gen) * rnd_in
+
+        # do the alignment (eq 2)
+        # this is m-dimensions - each word is summed into 1 vector
+        # to represent the whole sequence, so N x batch x m becomes batch x m
+        s = self.align(h_gen, h_lang)
+
+        # run the LSTM (eq 3)
+        # val is batch x m+z_dims
+        val = self.gen_in.run(T.concatenate([z,s], axis=1))
+        h_gen_t, c_gen_t = self.gen_lstm.run(val, h_gen, c_gen)
+
+        mu_gen = T.tanh(self.W_mu_gen, h_gen_t)
+        sigma_gen = T.tanh(self.W_sigma_gen, h_gen_t)
+
+        # do the write (eq 4)
+        c_t = c + self.writer.run(h_gen_t)
             
-            # I don't believe we actually need to sample from Q
-            # we just use it to minimze the loss so that it learns
-            # good values for the infer-lstm
-            return h_infer_t, c_infer_t, c_t
+        return h_gen_t, c_gen_t, mu_gen, sigma_gen, c_t
 
-    def train(self, stuff):
+    def train(self, x, y):
+        # do language model on y
+
+        # setup output
+        outputs_info = [dict(initial=, taps=[-1]), # kl
+                        dict(initial=, taps=[-1]), # h_infer
+                        dict(initial=, taps=[-1]), # c_infer
+                        dict(initial=, taps=[-1]), # h_gen
+                        dict(initial=, taps=[-1]), # c_gen
+                        dict(initial=, taps=[-1]), # c
+                        dict(initial=, taps=[-1]), # mu_gen
+                        dict(initial=, taps=[-1])], # sigma_gen
+
         # do scan
+        theano.scan(fn=self.step_train,
+                    sequences=rnd_in,
+                    outputs_info=outputs_info,
+                    non_sequences=h_lang,
+                    n_steps=self.steps)
+    def step_train(self, rnd_in, kl, h_infer, c_infer, h_gen, c_gen, c, mu_gen, sigma_gen, h_lang):
+
+                    
 
         # Get x-reconstruction-error (eq 5)
         x_recons = T.nnet.sigmoid(c[-1,:,:])
+        log_recons = T.nnet.binary_crossentropy(x_recons, x).sum()
         
+        # compute KL
+        kl = 0.5*kl[-1]
+
+        log_likelihood = kl + log_recons
+        log_likelihood = log_likelihood.mean()
+        kl = kl.mean()
+        log_recons = log_recons.mean()
+        return kl, log_recons, log_likelihood, c
