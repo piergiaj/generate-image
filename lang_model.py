@@ -30,8 +30,7 @@ class LanguageModel(Model):
     def __init__(self, bs, K, N, m):
         # builds a bidirectional LSTM to create
         # a m-dimensional hidden state for the given
-        # sequence of lenth N with vocab size
-        # K
+        # sequence of lenth N with vocab size K
         self.K = K
         self.N = N
         self.m = m
