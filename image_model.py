@@ -15,12 +15,12 @@ from model import Model
 import layers.activations as act
 from layers.dropout import dropout
 from layers.lstm2_layer import LSTMLayer
-from layer.hidden_layer import HiddenLayer
+from layers.hidden_layer import HiddenLayer
 from layers.read_layer import ReadLayer
 from layers.write_layer import WriteLayer
-from initialize import IsotropicGaussian as init
+from initialize import IsotropicGaussian
 
-from language_model import LanguageModel
+from lang_model import LanguageModel
 
 np.random.seed(np.random.randint(1 << 30))
 rng = RandomStreams(seed=np.random.randint(1 << 30))
@@ -28,26 +28,38 @@ np_rng = np.random.RandomState()
 
 def zeros(shape):
     return np.zeros(shape).astype(theano.config.floatX)
+def flatten_f(aList):
+    t = []
+    for i in aList:
+        if not isinstance(i, list):
+             t.append(i)
+        else:
+             t.extend(flatten_f(i))
+    return t
 
 
 class ImageModel(Model):
-    def __init__(self, bs, K, lang_N, N, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, seed=12345, channels=3):
+    def __init__(self, bs, K, lang_N, steps, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, seed=12345, channels=1, image_size=60*60):
         # K is the vocab size
         # lang_N is the (max) length of the sentence encoding
         # N is the number of times to run the model
         # m is the size of the langauge representation
         # l is the dimensions in the align function
+        # image_size is the w*h of image (assumed square)
+        self.use_gpu = True
         self.batch_size = bs
         self.gen_dim = gen_dim
         self.z_dim = z_dim
         self.m = m
-        self.N = N
+        self.lang_N = lang_N
+        self.steps = steps
         self.l = l
         self.read_size = read_size
         self.write_size = write_size
         self.infer_dim = infer_dim
+        self.image_size = image_size
 
-        self.langauge_model = LanguageModel(bs, K, lang_N, m)
+        self.language_model = LanguageModel(bs, K, lang_N, m)
 
         self.gen_in = HiddenLayer(input_size=m+z_dim, hidden_size=gen_dim*4,
                                   batch_size=bs, name='gen-lstm-in')
@@ -56,7 +68,7 @@ class ImageModel(Model):
                                   batch_size=bs,
                                   dropout=0.0,
                                   name='gen-lstm')
-        self.infer_in = HiddenLayer(input_size=2*self.read_size+self.gen_dim,
+        self.infer_in = HiddenLayer(input_size=2*self.read_size**2+self.gen_dim,
                                     hidden_size=infer_dim*4,
                                     batch_size=bs, name='infer-lstm-in')
         self.infer_lstm = LSTMLayer(hidden_size=infer_dim, 
@@ -65,29 +77,30 @@ class ImageModel(Model):
                                     dropout=0.0,
                                     name='infer-lstm')
 
-        self.reader = ReadLayer(batch_size=batch_size,
+        self.reader = ReadLayer(batch_size=self.batch_size,
                                 N=self.read_size,
                                 channels=channels,
-                                image_width=np.sqrt(self.image_size),
-                                image_height=np.sqrt(self.image_size),
+                                image_width=int(np.sqrt(self.image_size)),
+                                image_height=int(np.sqrt(self.image_size)),
                                 input_hidden_size=gen_dim,
                                 name='Read')
-        self.writer = WriteLayer(batch_size=batch_size,
+        self.writer = WriteLayer(batch_size=self.batch_size,
                                  N=self.write_size,
                                  channels=channels,
-                                 image_width=np.sqrt(self.image_size),
-                                 image_height=np.sqrt(self.image_size),
+                                 image_width=int(np.sqrt(self.image_size)),
+                                 image_height=int(np.sqrt(self.image_size)),
                                  input_hidden_size=gen_dim,
                                  name='Write')
         self.random = RandomStreams(seed)
 
         # create W_mu, W_sigma, v, U, W, b
-        u = init.init(np_rng, (self.l, self.m))
+        init = IsotropicGaussian(0.01)
+        u = init.init(np_rng, (self.m, self.l))
         self.U = theano.shared(value=u, name='U', borrow=True)
         v = init.init(np_rng, (self.l,))
         self.v = theano.shared(value=v, name='v', borrow=True)
-        w = init.init(np_rng, (self.l, self.gen_dim))
-        self.W = theano.shared(value=v, name='W', borrow=True)
+        w = init.init(np_rng, (self.gen_dim, self.l))
+        self.W = theano.shared(value=w, name='W', borrow=True)
         b = init.init(np_rng, (self.l,))
         self.b = theano.shared(value=b, name='b', borrow=True)
 
@@ -99,21 +112,27 @@ class ImageModel(Model):
 
         w_mu = init.init(np_rng, (self.gen_dim, self.z_dim))
         self.W_mu_gen = theano.shared(value=w_mu, name='W_mu_gen', borrow=True)
-        w_sigma = init.init(np_rng, (self.infer_gen, self.z_dim))
+        w_sigma = init.init(np_rng, (self.gen_dim, self.z_dim))
         self.W_sigma_gen = theano.shared(value=w_sigma, name='W_sigma_gen', borrow=True)
 
 
+    def batched_dot(self, A, B):
+        if self.use_gpu:
+            return theano.sandbox.cuda.blas.batched_dot(A, B)
+        else:
+            return T.batched_dot(A,B)
+
     @property
     def params(self):
-        return [self.U, self.v, self.W, self.b, self.W_mu_infer, self.W_sigma_infer,
-                self.W_mu_gen, self.W_sigma_gen] + self.language_model.params +
-        self.gen_in.params + self.gen_lstm.params + self.infer_in.params + self.infer_lstm.params +
-        self.reader.params + self.writer.params
+        return flatten_f([self.U, self.v, self.W, self.b, self.W_mu_infer, self.W_sigma_infer,
+                self.W_mu_gen, self.W_sigma_gen] + self.language_model.params + \
+        self.gen_in.params + self.gen_lstm.params + self.infer_in.params + self.infer_lstm.params + \
+        self.reader.params + self.writer.params)
 
     def align(self, h_gen, h_lang, mask):
         # h_lang is N x batch x m
         # h_gen is batch x gen_dim
-        # U is l x m
+        # U is m x l
         # mask determines which elements of h_lang we care about
         # we want the result to be N x batch x l
 
@@ -121,7 +140,7 @@ class ImageModel(Model):
         # by making U to be 1 x m x l
         # and mkaing h_lang to be N x batch x m
         # and repeating U N times on axis 0
-        U = self.U.reshape((1, self.m, self.l)).repeat(self.N, axis=0)
+        U = self.U.reshape((1, self.m, self.l)).repeat(self.lang_N, axis=0)
         # align_lang is now N x batch x l
         align_lang = self.batched_dot(h_lang, U)
 
@@ -139,7 +158,8 @@ class ImageModel(Model):
         # need to mask a before normalizing
         # so that the parts that are masked do
         # not affect the normalization
-        alpha = T.switch(mask, alpha, zeros((self.N, self.batch_size)))
+        mask = mask.transpose([1,0]) # make mask langN x batch_size
+        alpha = T.switch(mask, alpha, zeros((self.lang_N, self.batch_size)))
 
         # normalize a by the sum of a along the N (axis=0)
         # creates a vector of length N
@@ -150,7 +170,7 @@ class ImageModel(Model):
         # (alpha) * h_lang (m-vector)
         # we have alpha as N x batch
         # and h_lang as N x batch x m
-        s = h_lang * alpha.reshape((self.N, self.batch_size, 1))
+        s = h_lang * alpha.reshape((self.lang_N, self.batch_size, 1))
 
         # sum along the N axis to give batch x m
         s = T.sum(s, axis=0)
@@ -159,7 +179,7 @@ class ImageModel(Model):
 
     # use with partial to pass in first args
     # scan will pass the remaining args
-    def step_train(self, rnd_in, kl, h_infer, c_infer, h_gen, c_gen, c, mu_gen, sigma_gen, h_lang):
+    def step_train(self, rnd_in, kl, h_infer, c_infer, h_gen, c_gen, c, mu_gen, sigma_gen, h_lang, x, mask):
         # h_gen is a sequence
         # h_lang is a non-sequence (but it is used to calculate
         #     the align function each step)
@@ -168,8 +188,8 @@ class ImageModel(Model):
         # compute "error image"
         x_hat = x-T.nnet.sigmoid(c)
         # read from both input (x) and error image
-        r = self.reader.run(x, h_gen)
-        r_hat = self.reader.run(x_hat, h_gen)
+        r, _ = self.reader.run(x, h_gen)
+        r_hat, _ = self.reader.run(x_hat, h_gen)
         # concatente the two read regions
         r = T.concatenate([r,r_hat], axis=1)
         
@@ -181,8 +201,8 @@ class ImageModel(Model):
         # we just use it to minimze the loss so that it learns
         # good values for the infer-lstm
         # But we do need the mean and logsigma for KL
-        mu_infer = T.dot(self.W_mu_infer, h_infer_t)
-        sigma_infer = 0.5*T.dot(self.W_sigma_infer, h_infer_t)
+        mu_infer = T.dot(h_infer_t, self.W_mu_infer)
+        sigma_infer = 0.5*T.dot(h_infer_t, self.W_sigma_infer)
         # generate a sample from these normal distributions
         z = mu_infer + T.exp(sigma_infer) * rnd_in
         
@@ -196,22 +216,23 @@ class ImageModel(Model):
         # do the alignment (eq 2)
         # this is m-dimensions - each word is summed into 1 vector
         # to represent the whole sequence, so N x batch x m becomes batch x m
-        s = self.align(h_gen, h_lang)
+        s = self.align(h_gen, h_lang, mask)
 
         # run the LSTM (eq 3)
         # val is batch x m+z_dims
         val = self.gen_in.run(T.concatenate([z,s], axis=1))
         h_gen_t, c_gen_t = self.gen_lstm.run(val, h_gen, c_gen)
 
-        mu_gen = T.tanh(self.W_mu_gen, h_gen_t)
-        sigma_gen = T.tanh(self.W_sigma_gen, h_gen_t)
+        mu_gen = T.tanh(T.dot(h_gen_t, self.W_mu_gen))
+        sigma_gen = T.tanh(T.dot(h_gen_t, self.W_sigma_gen))
 
         # do the write (eq 4)
-        c_t = c + self.writer.run(h_gen_t)
+        c_update, _ = self.writer.run(h_gen_t)
+        c_t = c + c_update
 
         return kl_t, h_infer_t, c_infer_t, h_gen_t, c_gen_t, c_t, mu_gen, sigma_gen
     
-    def step_gen(self, rnd_in, h_gen c_gen, mu_gen, sigma_gen, c, h_lang):
+    def step_gen(self, rnd_in, h_gen, c_gen, mu_gen, sigma_gen, c, h_lang):
         # generate a sample from the generative distribution
         z = mu_gen + T.exp(sigma_gen) * rnd_in
 
@@ -225,15 +246,15 @@ class ImageModel(Model):
         val = self.gen_in.run(T.concatenate([z,s], axis=1))
         h_gen_t, c_gen_t = self.gen_lstm.run(val, h_gen, c_gen)
 
-        mu_gen = T.tanh(self.W_mu_gen, h_gen_t)
-        sigma_gen = T.tanh(self.W_sigma_gen, h_gen_t)
+        mu_gen = T.tanh(T.dot(h_gen_t, self.W_mu_gen))
+        sigma_gen = T.tanh(T.dot(h_gen_t, self.W_sigma_gen))
 
         # do the write (eq 4)
         c_t = c + self.writer.run(h_gen_t)
             
         return h_gen_t, c_gen_t, mu_gen, sigma_gen, c_t
 
-    def train(self, x, y):
+    def train(self, x, y, mask):
         # do language model on y
         h_lang = self.language_model.run(y)
 
@@ -241,7 +262,7 @@ class ImageModel(Model):
         # do train recurrence
         h_infer, c_infer = self.infer_lstm.get_initial_hidden
         h_gen, c_gen = self.gen_lstm.get_initial_hidden
-        c0 = theano.shared(-10*np.ones((1, self.image_size)).astype(theano.config.floatX))
+        c0 = theano.shared(-10*np.ones((self.batch_size, self.image_size)).astype(theano.config.floatX))
 
         rnd_in = rng.normal(size=(self.steps, self.batch_size, self.z_dim), 
                             avg=0.0, std=1.0, dtype=theano.config.floatX)
@@ -254,15 +275,15 @@ class ImageModel(Model):
                         dict(initial=c_gen, taps=[-1]), # c_gen
                         dict(initial=c0, taps=[-1]), # c
                         dict(initial=T.zeros((self.batch_size,self.z_dim)), taps=[-1]), # mu_gen
-                        dict(initial=T.zeros((self.batch_size,self.z_dim)), taps=[-1])],# sigma_gen
+                        dict(initial=T.zeros((self.batch_size,self.z_dim)), taps=[-1])] # sigma_gen
 
         # do scan
-        [kl, h_infer, c_infer, h_gen, c_gen, c, mu_gen, sigma_gen] = theano.scan(
-                                                                        fn=self.step_train,
-                                                                        sequences=rnd_in,
-                                                                        outputs_info=outputs_info,
-                                                                        non_sequences=h_lang,
-                                                                        n_steps=self.steps)
+        [kl, h_infer, c_infer, h_gen, c_gen, c, mu_gen, sigma_gen], _ = theano.scan(
+                                                                         fn=self.step_train,
+                                                                         sequences=rnd_in,
+                                                                         outputs_info=outputs_info,
+                                                                         non_sequences=[h_lang,x,mask],
+                                                                         n_steps=self.steps)
                     
 
         # Get x-reconstruction-error (eq 5)
@@ -277,3 +298,16 @@ class ImageModel(Model):
         kl = kl.mean()
         log_recons = log_recons.mean()
         return kl, log_recons, log_likelihood, c
+
+
+    @property
+    def inputs(self):
+        return self._inputs
+
+    @property
+    def outputs(self):
+        return self._outputs
+    
+    @property
+    def updates(self):
+        return self._updates

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import division
 import os
+import gzip
 from fuel.datasets import Dataset
 from fuel.transformers.defaults import uint8_pixels_to_floatX
 from fuel.utils import find_in_data_path
@@ -113,7 +114,7 @@ def create_1digit_mnist_image_bottomleft(digit1):
 class CaptionedMNIST(Dataset):
 
     def __init__(self, banned, num=10000, dataset='train', **kwargs):
-        self.provides_sources = ('features','captions')
+        self.provides_sources = ('features','captions', 'mask')
         super(CaptionedMNIST, self).__init__(**kwargs)
         self.num_examples = num
 
@@ -127,14 +128,15 @@ class CaptionedMNIST(Dataset):
         f.close()
 
         if dataset == 'train':
-            self.labels = train_set[0]
-            self.data = train_set[1]
+            self.labels = train_set[1]
+            self.data = train_set[0]
         elif dataset == 'valid':
-            self.labels = valid_set[0]
-            self.data = valid_set[1]
+            self.labels = valid_set[1]
+            self.data = valid_set[0]
         elif dataset == 'test':
-            self.labels = test_set[0]
-            self.data = test_set[1]
+            self.labels = test_set[1]
+            self.data = test_set[0]
+        print self.labels.shape
 
     def reset(self, state):
         self.index = 0
@@ -156,7 +158,8 @@ class CaptionedMNIST(Dataset):
             raise StopIteration
         bs = request[-1] - request[0]+1
         images = np.zeros((bs,60*60)).astype('float32')
-        captions = np.zeros((bs,12))
+        captions = np.zeros((bs,12)).astype(int)
+        mask = np.ones((bs,12)).astype(int)
         labels = self.labels
         data = self.data
 
@@ -171,7 +174,7 @@ class CaptionedMNIST(Dataset):
                     if self.labels[d1] == self.banned[k*2] or labels[d2] == self.banned[k*2+1]:
                         continue
                     break
-                elif labels[d1] == banned[k+4]:
+                elif labels[d1] == self.banned[k+4]:
                     continue
                 else:
                     break
@@ -208,4 +211,4 @@ class CaptionedMNIST(Dataset):
             elif k == 7:
                 images[i,:] = create_1digit_mnist_image_bottomleft(data[d1,:])
             
-        return (images, captions)
+        return (images, captions, mask)

@@ -1,3 +1,15 @@
+# ========= STD Libs  ============
+from __future__ import division
+import os
+import shutil
+import sys
+import logging
+import ipdb
+import cPickle
+import argparse
+import time
+sys.setrecursionlimit(1000000)
+
 # ========= Theano/npy ===========
 import theano
 import theano.tensor as T
@@ -18,7 +30,7 @@ from extensions.save_model import SaveModel, SaveBestModel
 
 
 from image_model import ImageModel
-
+from caption_mnist import CaptionedMNIST
 
 
 def run():
@@ -30,21 +42,27 @@ def run():
     
 
     bs = 128
-    # scale dataset to 224x224
+    data_train = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='train', num=50000)
+    data_test = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='test', num=10000)
+    data_valid = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='valid', num=10000)
+
     train_stream = DataStream.default_stream(data_train, iteration_scheme=SequentialScheme(data_train.num_examples, bs))
     valid_stream = DataStream.default_stream(data_valid, iteration_scheme=SequentialScheme(data_valid.num_examples, bs))
     test_stream  = DataStream.default_stream(data_test,  iteration_scheme=SequentialScheme(data_test.num_examples, bs))
 
 
-    img_height, img_width = image_size
+    img_height, img_width = (60,60)
 
     
     x = T.matrix('features')
-    y = T.matrix('captions')
-    #    y.tag.test_value = np.random.rand(bs, 5, 20).astype('int16')
-    
+    x.tag.test_value = np.random.rand(bs, 60*60).astype('float32')
+    y = T.lmatrix('captions')
+    y.tag.test_value = np.random.rand(bs, 12).astype(int)
+    mask = T.lmatrix('mask')
+    mask.tag.test_value = np.ones((bs,12)).astype(int)
+
     K = 22
-    lang_N = 10
+    lang_N = 12
     N = 32
     read_size = 8
     write_size = 8
@@ -54,26 +72,27 @@ def run():
     z_dim = 150
     l = 512
 
-    model = ImageModel(bs, K, lang_N, N, read_size, write_size, m, gen_dim, infer_dim, z_dim, l)
+    model = ImageModel(bs, K, lang_N, N, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, image_size=60*60)
+    model._inputs = [x,y,mask]
 
-    kl, log_recons, log_likelihood, c = model.train(x,y)
+    kl, log_recons, log_likelihood, c = model.train(x,y,mask)
     kl.name = 'kl'
     log_recons.name = 'log_recons'
     log_likelihood.name = 'log_likelihood'
     c.name = 'c'
 
-    model.set_outputs([kl, log_recons, log_likelihood, c])
+    model._outputs = [kl, log_recons, log_likelihood, c]
 
     params = model.params
 
     from solvers.RMSProp import RMSProp as solver
-    updates = solver(loss, params, lr=0.001)#, clipnorm=10.0)
-    model.set_updates(updates)
+    updates = solver(kl, params, lr=0.001)#, clipnorm=10.0)
+    model._updates = updates
 
 
     # ============= TRAIN =========
     plots = [['train_kl','valid_kl']]
-    main_loop = MainLoop(net, train_stream,
+    main_loop = MainLoop(model, train_stream,
                          [FinishAfter(epochs),
                           Track(variables=['kl','c'], prefix='train'),
                           TrackBest(variables=['kl'], prefix='train'),
@@ -85,8 +104,8 @@ def run():
     main_loop.run()
 
 if __name__ == '__main__':
-#    theano.config.compute_test_value = 'warn'
-#    theano.config.optimizer='None'#'fast_compile'
+    theano.config.compute_test_value = 'warn'
+    theano.config.optimizer='fast_compile'
 #    theano.config.exception_verbosity='high'
     run()
 

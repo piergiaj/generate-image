@@ -15,15 +15,16 @@ from model import Model
 import layers.activations as act
 from layers.dropout import dropout
 from layers.lstm2_layer import LSTMLayer
-from layer.hidden_layer import HiddenLayer
+from layers.hidden_layer import HiddenLayer
 
 
-def zeros(shape):
-    return theano.shared(np.zeros(shape).astype(theano.config.floatX))
+def zeros(shape, type=theano.config.floatX):
+    return theano.shared(np.zeros(shape).astype(type))
 
-def to_one_hot(y, classes):
-    tmp = T.zeros((y.shape[0], classes))
-    return T.set_subtensor(tmp[T.arange(y.shape[0]), y], 1)
+def to_one_hot(y, bs, classes):
+    y = theano.printing.Print('yshape')(y)
+    tmp = T.zeros((bs, classes))
+    return T.set_subtensor(tmp[T.arange(bs), y], 1)
 
 
 class LanguageModel(Model):
@@ -35,26 +36,26 @@ class LanguageModel(Model):
         self.N = N
         self.m = m
         self.bs = bs
-        self.forward_in = HiddenLayer(input_size=K, hidden_size=m*4,
+        self.forward_in = HiddenLayer(input_size=K, hidden_size=m*4//2,
                                       batch_size=bs, name='forward-lstm-in')
-        self.forward_lstm = LSTMLayer(hidden_size=m, 
+        self.forward_lstm = LSTMLayer(hidden_size=m//2, 
                                       activation=T.tanh, 
                                       batch_size=bs,
                                       dropout=0.0,
                                       name='forward-lstm')
         
-        self.backward_in = HiddenLayer(input_size=K, hidden_size=m*4,
+        self.backward_in = HiddenLayer(input_size=K, hidden_size=m*4//2,
                                        batch_size=bs, name='backward-lstm-in')
-        self.backward_lstm = LSTMLayer(hidden_size=m, 
+        self.backward_lstm = LSTMLayer(hidden_size=m//2, 
                                        activation=T.tanh, 
                                        batch_size=bs,
                                        dropout=0.0,
                                        name='backward-lstm')
         
     def run(self, y):
-        # y comes in as shape bactch X total_seq x 1
-        y = y.transpose([1,0,2])
-        # y is of shape seq X batch X 1 and of type 'int'
+        # y comes in as shape batch X total_seq
+        y = y.transpose([1,0])
+        # y is of shape seq X batch and of type 'int'
         # y needs to be 1-hot encoded, but this is more
         # easily done in the step function
 
@@ -83,21 +84,21 @@ class LanguageModel(Model):
         # concatenate correctly to         [4/3,13/25,45/13,3/4,X,X,X]
 
         # stores the indices of the string
-        b_indx = zeros((N, batch_size), int)
+        b_indx = zeros((self.N, self.bs), int)
         # stores the last-set index
-        c = zeros((batch_size,), int)
+        c = zeros((self.bs,), int)
         # This loop creates an array that can be used to
         # map hb to hf with the proper alignment
-        for i in range(N):
+        for i in range(self.N):
             # if this part of y_rev is 0, ignore
             # else, get the current index
-            indx = T.switch(T.neq(y_rev[:,i], 0), i, 0)
+            indx = T.switch(T.neq(y_rev[i,:], 0), i, 0)
             # set b_indx to be the current indx if this is
             # a valid part of the string
-            b_indx = T.set_subtensor(b_indx[c,T.arange(batch_size)], indx)
+            b_indx = T.set_subtensor(b_indx[c,T.arange(self.bs)], indx)
             
             # increment those that were used
-            inc = T.switch(T.neq(y_rev[:,i], 0), 1, 0)
+            inc = T.switch(T.neq(y_rev[i,:], 0), 1, 0)
             c  = c + inc
             
         # the magic that gets hb to align with hf
@@ -105,7 +106,7 @@ class LanguageModel(Model):
         # diagonal as the elements we are interested in. This results in
         # essentially "shifting" the first non-zero element of hb
         # to the front of the list, for each sample in the batch
-        h_b_aligned = hb[b_indx][:,T.arange(batch_size),T.arange(batch_size)]
+        h_b_aligned = hb[b_indx][:,T.arange(self.bs),T.arange(self.bs)]
         # concatenate them together. Now everything is aligned, as it should be!
         h_lang = T.concatenate([hf, h_b_aligned], axis=2)
 
@@ -115,9 +116,11 @@ class LanguageModel(Model):
         return h_lang
 
     def step(self, y_m, yb_m, hf, cf, hb, cb):
+        # y_m/yb_m are what shape? should be batch_size (x 1)
+        print y_m.ndim
         # one-hot encode y,yb (NEED TO SAVE PREVIOUS VALUES FOR MASKING!!!)
-        y = to_one_hot(y_m, self.K)
-        yb = to_one_hot(yb_m, self.K)
+        y = to_one_hot(y_m, self.bs, self.K)
+        yb = to_one_hot(yb_m, self.bs, self.K)
 
         # get forward and backward inputs values
         y_f_in = self.forward_in.run(y)
