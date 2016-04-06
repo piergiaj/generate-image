@@ -41,7 +41,7 @@ def run():
         os.mkdir(subdir)
     
 
-    bs = 128
+    bs = 64
     data_train = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='train', num=50000)
     data_test = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='test', num=10000)
     data_valid = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='valid', num=10000)

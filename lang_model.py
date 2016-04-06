@@ -22,7 +22,7 @@ def zeros(shape, type=theano.config.floatX):
     return theano.shared(np.zeros(shape).astype(type))
 
 def to_one_hot(y, bs, classes):
-    y = theano.printing.Print('yshape')(y)
+#    y = theano.printing.Print('yshape')(y)
     tmp = T.zeros((bs, classes))
     return T.set_subtensor(tmp[T.arange(bs), y], 1)
 

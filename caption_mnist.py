@@ -113,10 +113,11 @@ def create_1digit_mnist_image_bottomleft(digit1):
 
 class CaptionedMNIST(Dataset):
 
-    def __init__(self, banned, num=10000, dataset='train', **kwargs):
+    def __init__(self, banned, bs=128, num=10000, dataset='train', **kwargs):
         self.provides_sources = ('features','captions', 'mask')
         super(CaptionedMNIST, self).__init__(**kwargs)
-        self.num_examples = num
+        self.num_examples = num+(num%bs)
+        self.bs = bs
 
         self.example_iteration_scheme = SequentialExampleScheme(
             self.num_examples)
@@ -156,7 +157,8 @@ class CaptionedMNIST(Dataset):
         if self.index >= self.num_examples:
             self.done = False
             raise StopIteration
-        bs = request[-1] - request[0]+1
+        #bs = request[-1] - request[0]+1
+        bs = self.bs
         images = np.zeros((bs,60*60)).astype('float32')
         captions = np.zeros((bs,12)).astype(int)
         mask = np.ones((bs,12)).astype(int)
