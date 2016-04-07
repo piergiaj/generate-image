@@ -131,11 +131,13 @@ class LanguageModel(Model):
         hb_t,cb_t = self.backward_lstm.run(y_b_in, hb, cb)
 
         # but only if y/yb is not 0 (apply mask)
-        hf = T.switch(T.neq(y_m, 0), hf_t, hf)
-        cf = T.switch(T.neq(y_m, 0), cf_t, cf)
+        mask_y = y_m.reshape((self.bs, 1))#.repeat(self.m//2, axis=1) # these lines *shouldnt* be needed...
+        mask_yb = yb_m.reshape((self.bs, 1))#.repeat(self.m//2, axis=1)
+        hf = T.switch(T.neq(mask_y, 0), hf_t, hf)
+        cf = T.switch(T.neq(mask_y, 0), cf_t, cf)
         # and backward
-        hb = T.switch(T.neq(yb_m, 0), hb_t, hb)
-        cb = T.switch(T.neq(yb_m, 0), cb_t, cb)
+        hb = T.switch(T.neq(mask_yb, 0), hb_t, hb)
+        cb = T.switch(T.neq(mask_yb, 0), cb_t, cb)
 
         # return the new values
         return hf,cf,hb,cb

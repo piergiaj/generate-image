@@ -262,7 +262,8 @@ class ImageModel(Model):
         # do train recurrence
         h_infer, c_infer = self.infer_lstm.get_initial_hidden
         h_gen, c_gen = self.gen_lstm.get_initial_hidden
-        c0 = theano.shared(-10*np.ones((self.batch_size, self.image_size)).astype(theano.config.floatX))
+        c0 = theano.shared(-10*np.ones((1, self.image_size)).astype(theano.config.floatX))
+        c0 = c0.repeat(self.batch_size, axis=0)
 
         rnd_in = rng.normal(size=(self.steps, self.batch_size, self.z_dim), 
                             avg=0.0, std=1.0, dtype=theano.config.floatX)

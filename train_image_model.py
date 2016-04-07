@@ -4,11 +4,14 @@ import os
 import shutil
 import sys
 import logging
-import ipdb
+#import ipdb
 import cPickle
 import argparse
 import time
-sys.setrecursionlimit(1000000)
+sys.setrecursionlimit(100000000)
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # ========= Theano/npy ===========
 import theano
@@ -35,16 +38,16 @@ from caption_mnist import CaptionedMNIST
 
 def run():
     name = 'captioned-mnist'
-    epochs = 500
+    epochs = 200
     subdir = name + "-" + time.strftime("%Y%m%d-%H%M%S")
     if not os.path.isdir(subdir):
         os.mkdir(subdir)
     
 
-    bs = 64
-    data_train = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='train', num=50000)
-    data_test = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='test', num=10000)
-    data_valid = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='valid', num=10000)
+    bs = 150
+    data_train = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='train', num=20000, bs=bs)
+    data_test = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='test', num=10000, bs=bs)
+    data_valid = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='valid', num=10000, bs=bs)
 
     train_stream = DataStream.default_stream(data_train, iteration_scheme=SequentialScheme(data_train.num_examples, bs))
     valid_stream = DataStream.default_stream(data_valid, iteration_scheme=SequentialScheme(data_valid.num_examples, bs))
@@ -55,11 +58,11 @@ def run():
 
     
     x = T.matrix('features')
-    x.tag.test_value = np.random.rand(bs, 60*60).astype('float32')
+ #   x.tag.test_value = np.random.rand(bs, 60*60).astype('float32')
     y = T.lmatrix('captions')
-    y.tag.test_value = np.random.rand(bs, 12).astype(int)
+ #   y.tag.test_value = np.random.rand(bs, 12).astype(int)
     mask = T.lmatrix('mask')
-    mask.tag.test_value = np.ones((bs,12)).astype(int)
+ #   mask.tag.test_value = np.ones((bs,12)).astype(int)
 
     K = 22
     lang_N = 12
@@ -94,18 +97,18 @@ def run():
     plots = [['train_kl','valid_kl']]
     main_loop = MainLoop(model, train_stream,
                          [FinishAfter(epochs),
-                          Track(variables=['kl','c'], prefix='train'),
-                          TrackBest(variables=['kl'], prefix='train'),
-                          DataStreamTrack(valid_stream, ['kl','c'], prefix='valid'),
-                          Plot(name, plots, 'http://nameless-wave-6526.herokuapp.com/'),
+                          Track(variables=['kl'], prefix='train'),
+                          #TrackBest(variables=['kl'], prefix='train'),
+                          #DataStreamTrack(valid_stream, ['kl','c'], prefix='valid'),
+                          #Plot(name, plots, 'http://nameless-wave-6526.herokuapp.com/'),
                           SaveModel(subdir, name+'.model'),
                           TimeProfile(),
                           Printing()])
     main_loop.run()
 
 if __name__ == '__main__':
-    theano.config.compute_test_value = 'warn'
-    theano.config.optimizer='fast_compile'
+#    theano.config.compute_test_value = 'warn'
+#    theano.config.optimizer='fast_compile'
 #    theano.config.exception_verbosity='high'
     run()
 

@@ -113,7 +113,7 @@ def create_1digit_mnist_image_bottomleft(digit1):
 
 class CaptionedMNIST(Dataset):
 
-    def __init__(self, banned, bs=128, num=10000, dataset='train', **kwargs):
+    def __init__(self, banned, bs=64, num=10000, dataset='train', **kwargs):
         self.provides_sources = ('features','captions', 'mask')
         super(CaptionedMNIST, self).__init__(**kwargs)
         self.num_examples = num+(num%bs)
@@ -139,6 +139,11 @@ class CaptionedMNIST(Dataset):
             self.data = test_set[0]
         print self.labels.shape
 
+        self.images = np.zeros((bs,60*60)).astype('float32')
+        self.captions = np.zeros((bs,12)).astype(int)
+        self.mask = np.ones((bs,12)).astype(int)
+
+
     def reset(self, state):
         self.index = 0
         self.close(state)
@@ -159,9 +164,11 @@ class CaptionedMNIST(Dataset):
             raise StopIteration
         #bs = request[-1] - request[0]+1
         bs = self.bs
-        images = np.zeros((bs,60*60)).astype('float32')
-        captions = np.zeros((bs,12)).astype(int)
-        mask = np.ones((bs,12)).astype(int)
+        images = self.images
+        images[...] = 0
+        captions = self.captions
+        captions[...] = 0
+        mask = self.mask
         labels = self.labels
         data = self.data
 
