@@ -232,27 +232,6 @@ class ImageModel(Model):
 
         return kl_t, h_infer_t, c_infer_t, h_gen_t, c_gen_t, c_t, mu_gen, sigma_gen
     
-    def step_gen(self, rnd_in, h_gen, c_gen, mu_gen, sigma_gen, c, h_lang):
-        # generate a sample from the generative distribution
-        z = mu_gen + T.exp(sigma_gen) * rnd_in
-
-        # do the alignment (eq 2)
-        # this is m-dimensions - each word is summed into 1 vector
-        # to represent the whole sequence, so N x batch x m becomes batch x m
-        s = self.align(h_gen, h_lang)
-
-        # run the LSTM (eq 3)
-        # val is batch x m+z_dims
-        val = self.gen_in.run(T.concatenate([z,s], axis=1))
-        h_gen_t, c_gen_t = self.gen_lstm.run(val, h_gen, c_gen)
-
-        mu_gen = T.tanh(T.dot(h_gen_t, self.W_mu_gen))
-        sigma_gen = T.tanh(T.dot(h_gen_t, self.W_sigma_gen))
-
-        # do the write (eq 4)
-        c_t = c + self.writer.run(h_gen_t)
-            
-        return h_gen_t, c_gen_t, mu_gen, sigma_gen, c_t
 
     def train(self, x, y, mask):
         # do language model on y
@@ -299,6 +278,64 @@ class ImageModel(Model):
         kl = kl.mean()
         log_recons = log_recons.mean()
         return kl, log_recons, log_likelihood, c
+
+
+    def generate_image(self, y, mask):
+        # do language model on y
+        h_lang = self.language_model.run(y)
+
+        # do train recurrence
+        h_gen, c_gen = self.gen_lstm.get_initial_hidden
+        c0 = theano.shared(-10*np.ones((1, self.image_size)).astype(theano.config.floatX))
+        c0 = c0.repeat(self.batch_size, axis=0)
+
+        rnd_in = rng.normal(size=(self.steps, self.batch_size, self.z_dim), 
+                            avg=0.0, std=1.0, dtype=theano.config.floatX)
+
+        # setup output
+        outputs_info = [dict(initial=h_gen, taps=[-1]), # h_gen
+                        dict(initial=c_gen, taps=[-1]), # c_gen
+                        dict(initial=c0, taps=[-1]), # c
+                        dict(initial=T.zeros((self.batch_size,self.z_dim)), taps=[-1]), # mu_gen
+                        dict(initial=T.zeros((self.batch_size,self.z_dim)), taps=[-1])] # sigma_gen
+
+        # do scan
+        [h_gen, c_gen, c, mu_gen, sigma_gen], _ = theano.scan(fn=self.step_gen,
+                                                              sequences=rnd_in,
+                                                              outputs_info=outputs_info,
+                                                              non_sequences=[h_lang,mask],
+                                                              n_steps=self.steps)
+        c = T.nnet.sigmoid(c)
+
+        return c[-1].reshape((1,self.batch_size,self.image_size))
+
+    def step_gen(self, rnd_in, h_gen, c_gen, c, mu_gen, sigma_gen, h_lang, mask):
+        # generate a sample from the generative distribution
+        z = mu_gen + T.exp(sigma_gen) * rnd_in
+
+        # do the alignment (eq 2)
+        # this is m-dimensions - each word is summed into 1 vector
+        # to represent the whole sequence, so N x batch x m becomes batch x m
+        s = self.align(h_gen, h_lang, mask)
+
+        # run the LSTM (eq 3)
+        # val is batch x m+z_dims
+        val = self.gen_in.run(T.concatenate([z,s], axis=1))
+        h_gen_t, c_gen_t = self.gen_lstm.run(val, h_gen, c_gen)
+
+        mu_gen = T.tanh(T.dot(h_gen_t, self.W_mu_gen))
+        sigma_gen = T.tanh(T.dot(h_gen_t, self.W_sigma_gen))
+
+        # do the write (eq 4)
+        c_update, _ = self.writer.run(h_gen_t)
+        c_t = c + c_update
+            
+        return h_gen_t, c_gen_t, c_t, mu_gen, sigma_gen
+
+
+    def build_sample_function(self, y, mask):
+        c = self.generate_image(y, mask)
+        self.sample_sentences = theano.function([y, mask], [c])
 
 
     @property

@@ -34,7 +34,8 @@ from extensions.save_model import SaveModel, SaveBestModel
 
 from image_model import ImageModel
 from caption_mnist import CaptionedMNIST
-
+from sample_sentences import SampleSentences
+from lr_ext import DropLearningRate
 
 def run():
     name = 'captioned-mnist'
@@ -45,24 +46,22 @@ def run():
     
 
     bs = 150
-    data_train = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='train', num=20000, bs=bs)
-    data_test = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='test', num=10000, bs=bs)
+    data_train = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='train', num=50000, bs=bs)
     data_valid = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='valid', num=10000, bs=bs)
 
     train_stream = DataStream.default_stream(data_train, iteration_scheme=SequentialScheme(data_train.num_examples, bs))
     valid_stream = DataStream.default_stream(data_valid, iteration_scheme=SequentialScheme(data_valid.num_examples, bs))
-    test_stream  = DataStream.default_stream(data_test,  iteration_scheme=SequentialScheme(data_test.num_examples, bs))
 
 
     img_height, img_width = (60,60)
 
     
     x = T.matrix('features')
- #   x.tag.test_value = np.random.rand(bs, 60*60).astype('float32')
+    #x.tag.test_value = np.random.rand(bs, 60*60).astype('float32')
     y = T.lmatrix('captions')
- #   y.tag.test_value = np.random.rand(bs, 12).astype(int)
+    #y.tag.test_value = np.random.rand(bs, 12).astype(int)
     mask = T.lmatrix('mask')
- #   mask.tag.test_value = np.ones((bs,12)).astype(int)
+    #mask.tag.test_value = np.ones((bs,12)).astype(int)
 
     K = 22
     lang_N = 12
@@ -89,18 +88,26 @@ def run():
     params = model.params
 
     from solvers.RMSProp import RMSProp as solver
-    updates = solver(kl, params, lr=0.001)#, clipnorm=10.0)
+    lr = theano.shared(np.asarray(0.001).astype(theano.config.floatX))
+    updates = solver(log_likelihood, params, lr=lr)#0.001)#, clipnorm=10.0)
     model._updates = updates
 
+    logger.info('Compiling sample function')
+    model.build_sample_function(y, mask)
+    logger.info('Compiled sample function')
 
     # ============= TRAIN =========
-    plots = [['train_kl','valid_kl']]
+    plots = [['train_kl','valid_kl'],
+             ['train_log_recons','valid_log_recons'],
+             ['train_log_likelihood','valid_log_likelihood']]
     main_loop = MainLoop(model, train_stream,
                          [FinishAfter(epochs),
-                          Track(variables=['kl'], prefix='train'),
+                          Track(variables=['kl','log_recons','log_likelihood'], prefix='train'),
                           #TrackBest(variables=['kl'], prefix='train'),
-                          #DataStreamTrack(valid_stream, ['kl','c'], prefix='valid'),
-                          #Plot(name, plots, 'http://nameless-wave-6526.herokuapp.com/'),
+                          DataStreamTrack(valid_stream, ['kl','log_recons','log_likelihood'], prefix='valid'),
+                          SampleSentences(subdir, bs, 60, 60),
+                          DropLearningRate(lr, 110, 0.00001),
+                          Plot(name, plots, 'http://nameless-wave-6526.herokuapp.com/'),
                           SaveModel(subdir, name+'.model'),
                           TimeProfile(),
                           Printing()])
