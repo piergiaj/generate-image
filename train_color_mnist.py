@@ -33,12 +33,12 @@ from extensions.save_model import SaveModel, SaveBestModel
 
 
 from image_model import ImageModel
-from caption_mnist import CaptionedMNIST
-from sample_sentences import SampleSentences
+from caption_color_mnist import CaptionedMNIST
+from sample_color_sentences import SampleSentences
 from lr_ext import DropLearningRate
 
 def run():
-    name = 'captioned-mnist'
+    name = 'colored-mnist'
     epochs = 200
     subdir = name + "-" + time.strftime("%Y%m%d-%H%M%S")
     if not os.path.isdir(subdir):
@@ -63,8 +63,8 @@ def run():
     mask = T.lmatrix('mask')
     #mask.tag.test_value = np.ones((bs,12)).astype(int)
 
-    K = 22
-    lang_N = 12
+    K = 29
+    lang_N = 14
     N = 32
     read_size = 8
     write_size = 8
@@ -74,7 +74,7 @@ def run():
     z_dim = 150
     l = 512
 
-    model = ImageModel(bs, K, lang_N, N, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, image_size=60*60, cinit=-10)
+    model = ImageModel(bs, K, lang_N, N, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, image_size=60*60, cinit=-10, channels=3)
     model._inputs = [x,y,mask]
 
     kl, log_recons, log_likelihood, c = model.train(x,y,mask)

@@ -33,48 +33,48 @@ from extensions.save_model import SaveModel, SaveBestModel
 
 
 from image_model import ImageModel
-from caption_mnist import CaptionedMNIST
-from sample_sentences import SampleSentences
+from coco_dataset import MSCoco
+from sample_coco_sentences import SampleSentences
 from lr_ext import DropLearningRate
 
 def run():
-    name = 'captioned-mnist'
+    name = 'coco'
     epochs = 200
     subdir = name + "-" + time.strftime("%Y%m%d-%H%M%S")
     if not os.path.isdir(subdir):
         os.mkdir(subdir)
     
 
-    bs = 150
-    data_train = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='train', num=50000, bs=bs)
-    data_valid = CaptionedMNIST(banned=[np.random.randint(0,10) for i in xrange(12)], dataset='valid', num=10000, bs=bs)
+    bs = 200
+    data_train = MSCoco(dataset='train', num=82611, bs=bs)
+    data_valid = MSCoco(dataset='val', num=4989, bs=bs)
 
     train_stream = DataStream.default_stream(data_train, iteration_scheme=SequentialScheme(data_train.num_examples, bs))
     valid_stream = DataStream.default_stream(data_valid, iteration_scheme=SequentialScheme(data_valid.num_examples, bs))
 
 
-    img_height, img_width = (60,60)
+    img_height, img_width = (32,32)
 
     
     x = T.matrix('features')
-    #x.tag.test_value = np.random.rand(bs, 60*60).astype('float32')
+    #x.tag.test_value = np.random.rand(bs, 3*32*32).astype('float32')
     y = T.lmatrix('captions')
-    #y.tag.test_value = np.random.rand(bs, 12).astype(int)
+    #y.tag.test_value = np.random.rand(bs, 57).astype(int)
     mask = T.lmatrix('mask')
-    #mask.tag.test_value = np.ones((bs,12)).astype(int)
+    #mask.tag.test_value = np.ones((bs,57)).astype(int)
 
-    K = 22
-    lang_N = 12
+    K = 25323
+    lang_N = 57
     N = 32
-    read_size = 8
-    write_size = 8
+    read_size = 9
+    write_size = 9
     m = 256
-    gen_dim = 300
-    infer_dim = 300
-    z_dim = 150
+    gen_dim = 550
+    infer_dim = 550
+    z_dim = 275
     l = 512
 
-    model = ImageModel(bs, K, lang_N, N, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, image_size=60*60, cinit=-10)
+    model = ImageModel(bs, K, lang_N, N, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, image_size=32*32, channels=3, cinit=0.0)
     model._inputs = [x,y,mask]
 
     kl, log_recons, log_likelihood, c = model.train(x,y,mask)
@@ -89,7 +89,7 @@ def run():
 
     from solvers.RMSProp import RMSProp as solver
     lr = theano.shared(np.asarray(0.001).astype(theano.config.floatX))
-    updates = solver(log_likelihood, params, lr=lr)#0.001)#, clipnorm=10.0)
+    updates = solver(log_likelihood, params, lr=lr, clipnorm=10.0)#0.001)
     model._updates = updates
 
     logger.info('Compiling sample function')
@@ -105,8 +105,8 @@ def run():
                           Track(variables=['kl','log_recons','log_likelihood'], prefix='train'),
                           #TrackBest(variables=['kl'], prefix='train'),
                           DataStreamTrack(valid_stream, ['kl','log_recons','log_likelihood'], prefix='valid'),
-                          SampleSentences(subdir, bs, 60, 60),
-                          DropLearningRate(lr, 110, 0.00001),
+                          SampleSentences(subdir, bs, 32, 32),
+                          DropLearningRate(lr, 11, 0.00001),
                           Plot(name, plots, 'http://nameless-wave-6526.herokuapp.com/'),
                           SaveModel(subdir, name+'.model'),
                           TimeProfile(),
@@ -115,7 +115,7 @@ def run():
 
 if __name__ == '__main__':
 #    theano.config.compute_test_value = 'warn'
-#    theano.config.optimizer='fast_compile'
+ #   theano.config.optimizer='fast_compile'
 #    theano.config.exception_verbosity='high'
     run()
 

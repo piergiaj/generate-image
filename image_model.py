@@ -39,7 +39,7 @@ def flatten_f(aList):
 
 
 class ImageModel(Model):
-    def __init__(self, bs, K, lang_N, steps, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, seed=12345, channels=1, image_size=60*60):
+    def __init__(self, bs, K, lang_N, steps, read_size, write_size, m, gen_dim, infer_dim, z_dim, l, seed=12345, channels=1, image_size=60*60, cinit=0):
         # K is the vocab size
         # lang_N is the (max) length of the sentence encoding
         # N is the number of times to run the model
@@ -47,7 +47,9 @@ class ImageModel(Model):
         # l is the dimensions in the align function
         # image_size is the w*h of image (assumed square)
         self.use_gpu = True
+        self.cinit = cinit
         self.batch_size = bs
+        self.channels = channels
         self.gen_dim = gen_dim
         self.z_dim = z_dim
         self.m = m
@@ -68,7 +70,7 @@ class ImageModel(Model):
                                   batch_size=bs,
                                   dropout=0.0,
                                   name='gen-lstm')
-        self.infer_in = HiddenLayer(input_size=2*self.read_size**2+self.gen_dim,
+        self.infer_in = HiddenLayer(input_size=2*channels*self.read_size**2+self.gen_dim,
                                     hidden_size=infer_dim*4,
                                     batch_size=bs, name='infer-lstm-in')
         self.infer_lstm = LSTMLayer(hidden_size=infer_dim, 
@@ -159,7 +161,7 @@ class ImageModel(Model):
         # so that the parts that are masked do
         # not affect the normalization
         mask = mask.transpose([1,0]) # make mask langN x batch_size
-        alpha = T.switch(mask, alpha, zeros((self.lang_N, self.batch_size)))
+        alpha = T.switch(T.neq(mask,0), alpha, zeros((self.lang_N, self.batch_size)))
 
         # normalize a by the sum of a along the N (axis=0)
         # creates a vector of length N
@@ -241,7 +243,7 @@ class ImageModel(Model):
         # do train recurrence
         h_infer, c_infer = self.infer_lstm.get_initial_hidden
         h_gen, c_gen = self.gen_lstm.get_initial_hidden
-        c0 = theano.shared(-10*np.ones((1, self.image_size)).astype(theano.config.floatX))
+        c0 = theano.shared(self.cinit*np.ones((1, self.channels*self.image_size)).astype(theano.config.floatX))
         c0 = c0.repeat(self.batch_size, axis=0)
 
         rnd_in = rng.normal(size=(self.steps, self.batch_size, self.z_dim), 
@@ -286,7 +288,7 @@ class ImageModel(Model):
 
         # do train recurrence
         h_gen, c_gen = self.gen_lstm.get_initial_hidden
-        c0 = theano.shared(-10*np.ones((1, self.image_size)).astype(theano.config.floatX))
+        c0 = theano.shared(self.cinit*np.ones((1, self.channels*self.image_size)).astype(theano.config.floatX))
         c0 = c0.repeat(self.batch_size, axis=0)
 
         rnd_in = rng.normal(size=(self.steps, self.batch_size, self.z_dim), 
@@ -307,7 +309,7 @@ class ImageModel(Model):
                                                               n_steps=self.steps)
         c = T.nnet.sigmoid(c)
 
-        return c[-1].reshape((1,self.batch_size,self.image_size))
+        return c[-1].reshape((1,self.batch_size,self.channels, self.image_size))
 
     def step_gen(self, rnd_in, h_gen, c_gen, c, mu_gen, sigma_gen, h_lang, mask):
         # generate a sample from the generative distribution
