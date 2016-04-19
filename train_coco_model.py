@@ -1,5 +1,6 @@
 # ========= STD Libs  ============
 from __future__ import division
+from collections import OrderedDict
 import os
 import shutil
 import sys
@@ -87,9 +88,29 @@ def run():
 
     params = model.params
 
-    from solvers.RMSProp import RMSProp as solver
+    #from solvers.RMSProp import RMSProp as solver
     lr = theano.shared(np.asarray(0.001).astype(theano.config.floatX))
-    updates = solver(log_likelihood, params, lr=lr, clipnorm=10.0)#0.001)
+    #updates = solver(log_likelihood, params, lr=lr, clipnorm=10.0)#0.001)
+    #lr = 0.001
+    grads = T.grad(log_likelihood, params)
+    his = []
+    for p in params:
+        pz = p.get_value()*0
+        his.append(theano.shared(pz))
+
+    threshold = 10.0
+    decay = 0.9
+    updates = OrderedDict()
+
+    for p, ph, g in zip(params, his, grads):
+        l2_norm = T.sqrt(T.sqr(g).sum())
+        m = T.switch(l2_norm < threshold, 1, threshold/l2_norm)
+        grad = m*g
+        
+        ph_n = decay * ph + (1-decay)*grad**2
+        updates[ph] = ph_n
+        updates[p] = p-(lr/T.sqrt(ph_n+1e-6))*grad
+    
     model._updates = updates
 
     logger.info('Compiling sample function')
@@ -106,7 +127,7 @@ def run():
                           #TrackBest(variables=['kl'], prefix='train'),
                           DataStreamTrack(valid_stream, ['kl','log_recons','log_likelihood'], prefix='valid'),
                           SampleSentences(subdir, bs, 32, 32),
-                          DropLearningRate(lr, 11, 0.00001),
+                          DropLearningRate(lr, 25, 0.0001),
                           Plot(name, plots, 'http://nameless-wave-6526.herokuapp.com/'),
                           SaveModel(subdir, name+'.model'),
                           TimeProfile(),
