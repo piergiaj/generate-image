@@ -14,7 +14,7 @@ from model import Model
 # ========= Layers  ==============
 import layers.activations as act
 from layers.dropout import dropout
-from layers.lstm2_layer import LSTMLayer
+from layers.lstm_no_peephole_layer import LSTMLayer
 from layers.hidden_layer import HiddenLayer
 from layers.read_layer import ReadLayer
 from layers.write_layer import WriteLayer
@@ -172,11 +172,12 @@ class ImageModel(Model):
         # (alpha) * h_lang (m-vector)
         # we have alpha as N x batch
         # and h_lang as N x batch x m
-        s = h_lang * alpha.reshape((self.lang_N, self.batch_size, 1))
+        alpha = alpha.reshape((self.lang_N, self.batch_size, 1))
+        s = h_lang * alpha
 
         # sum along the N axis to give batch x m
         s = T.sum(s, axis=0)
-        return s
+        return s, alpha
 
 
     # use with partial to pass in first args
@@ -212,13 +213,10 @@ class ImageModel(Model):
         kl_t = kl + T.sum(-1 + ((mu_infer - mu_gen)**2 + T.exp(2*sigma_infer))/
                           (T.exp(2*sigma_gen)) - 2*sigma_infer + 2*sigma_gen)
         
-        # generate a sample from the generative distribution
-        z = mu_gen + T.exp(sigma_gen) * rnd_in
-
         # do the alignment (eq 2)
         # this is m-dimensions - each word is summed into 1 vector
         # to represent the whole sequence, so N x batch x m becomes batch x m
-        s = self.align(h_gen, h_lang, mask)
+        s,_ = self.align(h_gen, h_lang, mask)
 
         # run the LSTM (eq 3)
         # val is batch x m+z_dims
@@ -299,26 +297,26 @@ class ImageModel(Model):
                         dict(initial=c_gen, taps=[-1]), # c_gen
                         dict(initial=c0, taps=[-1]), # c
                         dict(initial=T.zeros((self.batch_size,self.z_dim)), taps=[-1]), # mu_gen
-                        dict(initial=T.zeros((self.batch_size,self.z_dim)), taps=[-1])] # sigma_gen
-
+                        dict(initial=T.zeros((self.batch_size,self.z_dim)), taps=[-1]), # sigma_gen
+                        dict(initial=T.zeros((self.lang_N,self.batch_size, 1)), taps=[-1])] # alpha
         # do scan
-        [h_gen, c_gen, c, mu_gen, sigma_gen], _ = theano.scan(fn=self.step_gen,
+        [h_gen, c_gen, c, mu_gen, sigma_gen, alpha], _ = theano.scan(fn=self.step_gen,
                                                               sequences=rnd_in,
                                                               outputs_info=outputs_info,
                                                               non_sequences=[h_lang,mask],
                                                               n_steps=self.steps)
         c = T.nnet.sigmoid(c)
 
-        return c[-1].reshape((1,self.batch_size,self.channels, self.image_size))
+        return c[-1].reshape((1,self.batch_size,self.channels, self.image_size)), alpha
 
-    def step_gen(self, rnd_in, h_gen, c_gen, c, mu_gen, sigma_gen, h_lang, mask):
+    def step_gen(self, rnd_in, h_gen, c_gen, c, mu_gen, sigma_gen, alpha, h_lang, mask):
         # generate a sample from the generative distribution
         z = mu_gen + T.exp(sigma_gen) * rnd_in
 
         # do the alignment (eq 2)
         # this is m-dimensions - each word is summed into 1 vector
         # to represent the whole sequence, so N x batch x m becomes batch x m
-        s = self.align(h_gen, h_lang, mask)
+        s, alpha = self.align(h_gen, h_lang, mask)
 
         # run the LSTM (eq 3)
         # val is batch x m+z_dims
@@ -332,11 +330,11 @@ class ImageModel(Model):
         c_update, _ = self.writer.run(h_gen_t)
         c_t = c + c_update
             
-        return h_gen_t, c_gen_t, c_t, mu_gen, sigma_gen
+        return h_gen_t, c_gen_t, c_t, mu_gen, sigma_gen, alpha
 
 
     def build_sample_function(self, y, mask):
-        c = self.generate_image(y, mask)
+        c, alpha = self.generate_image(y, mask)
         self.sample_sentences = theano.function([y, mask], [c])
 
 

@@ -14,7 +14,7 @@ from model import Model
 # ========= Layers  ==============
 import layers.activations as act
 from layers.dropout import dropout
-from layers.lstm2_layer import LSTMLayer
+from layers.lstm_no_peephole_layer import LSTMLayer
 from layers.hidden_layer import HiddenLayer
 
 

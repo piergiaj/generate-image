@@ -70,7 +70,6 @@ class SampleSentences(Extension):
     def do(self, *args, **kwargs):
         logger.info("Sampling Sentences")
         c = self.main_loop.model.sample_sentences(self.y, self.mask)[0]
-        
         img_grid(c, self.h, self.w, self.channels, self.subdir, self.iteration)
         self.iteration += 1
         logger.info("Done Sampling")

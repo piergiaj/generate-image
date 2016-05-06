@@ -39,7 +39,7 @@ from sample_coco_sentences import SampleSentences
 from lr_ext import DropLearningRate
 
 def run():
-    name = 'coco'
+    name = 'coco-nopeep'
     epochs = 200
     subdir = name + "-" + time.strftime("%Y%m%d-%H%M%S")
     if not os.path.isdir(subdir):
